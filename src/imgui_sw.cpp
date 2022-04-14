@@ -9,7 +9,7 @@
 #include <cmath>
 #include <vector>
 
-#include <imgui/imgui.h>
+#include <imgui.h>
 
 namespace imgui_sw {
 namespace {
