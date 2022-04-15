@@ -312,7 +312,8 @@ void paint_uniform_textured_rectangle(
 			// The font texture is all black or all white, so optimize for this:
 			if (texel == 0) { continue; }
 			if (texel == 255) {
-				target_pixel = min_v.col;
+				ColorInt source_color = ColorInt(min_v.col);
+				target_pixel = blend(ColorInt(target_pixel), source_color).toUint32();
 				continue;
 			}
 
@@ -706,7 +707,7 @@ void unbind_imgui_painting()
 {
 	ImGuiIO& io = ImGui::GetIO();
 	delete reinterpret_cast<Texture*>(io.Fonts->TexID);
-	io.Fonts = nullptr;
+	//io.Fonts = nullptr;
 }
 
 bool show_options(SwOptions* io_options)
