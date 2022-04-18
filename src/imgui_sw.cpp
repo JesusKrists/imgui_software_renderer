@@ -232,6 +232,10 @@ namespace {
     const ImVec2 min_p = ImVec2(target.scale.x * min_v.pos.x, target.scale.y * min_v.pos.y);
     const ImVec2 max_p = ImVec2(target.scale.x * max_v.pos.x, target.scale.y * max_v.pos.y);
 
+    float distanceX = max_p.x - min_p.x;
+    float distanceY = max_p.y - min_p.y;
+    if (distanceX == 0 || distanceY == 0) { return; }
+
     // Find bounding box:
     float min_x_f = min_p.x;
     float min_y_f = min_p.y;
@@ -261,8 +265,8 @@ namespace {
     const auto topleft = ImVec2(min_x_i + 0.5f * target.scale.x, min_y_i + 0.5f * target.scale.y);
 
     const ImVec2 delta_uv_per_pixel = {
-      (max_v.uv.x - min_v.uv.x) / (max_p.x - min_p.x),
-      (max_v.uv.y - min_v.uv.y) / (max_p.y - min_p.y),
+      (max_v.uv.x - min_v.uv.x) / distanceX,
+      (max_v.uv.y - min_v.uv.y) / distanceY,
     };
     const ImVec2 uv_topleft = {
       min_v.uv.x + (topleft.x - min_v.pos.x) * delta_uv_per_pixel.x,
