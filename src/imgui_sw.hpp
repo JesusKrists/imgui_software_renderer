@@ -14,7 +14,7 @@
 
 #include <cstdint>
 
-class ImDrawData;
+struct ImDrawData;
 namespace imgui_sw {
 
 struct SwOptions
