@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <iostream>
 
 #include <imgui.h>
 
@@ -44,31 +45,24 @@ namespace {
 
   // ----------------------------------------------------------------------------
 
+#pragma pack(push, 1)
   struct ColorInt
   {
-    uint32_t a, b, g, r;
-
+    uint8_t r, g, b, a = 0;
     ColorInt() = default;
-
-    explicit ColorInt(uint32_t x)
-    {
-      a = (x >> IM_COL32_A_SHIFT) & 0xFFu;
-      b = (x >> IM_COL32_B_SHIFT) & 0xFFu;
-      g = (x >> IM_COL32_G_SHIFT) & 0xFFu;
-      r = (x >> IM_COL32_R_SHIFT) & 0xFFu;
-    }
-
-    uint32_t toUint32() const { return (a << 24u) | (b << 16u) | (g << 8u) | r; }
+    ColorInt(uint32_t color)
+      : a((color & 0xFF000000) >> 24), b((color & 0x00FF0000) >> 16), g((color & 0x0000FF00) >> 8),
+        r((color & 0x000000FF))
+    {}
   };
+#pragma pack(pop)
 
-  ColorInt blend(ColorInt target, ColorInt source)
+  uint32_t blend(const ColorInt &target, const ColorInt &source)
   {
-    ColorInt result;
-    result.a = 0;// Whatever.
-    result.b = (source.b * source.a + target.b * (255 - source.a)) / 255;
-    result.g = (source.g * source.a + target.g * (255 - source.a)) / 255;
-    result.r = (source.r * source.a + target.r * (255 - source.a)) / 255;
-    return result;
+    if (source.a >= 255) return *reinterpret_cast<const uint32_t *>(&source);
+    return (0 << 24u) | (((source.b * source.a + target.b * (255 - source.a)) / 255) << 16u)
+           | (((source.g * source.a + target.g * (255 - source.a)) / 255) << 8u)
+           | ((source.r * source.a + target.r * (255 - source.a)) / 255);
   }
 
   // ----------------------------------------------------------------------------
@@ -170,19 +164,7 @@ namespace {
     return (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
   }
 
-  inline uint8_t sample_texture(const Texture &texture, const ImVec2 &uv)
-  {
-    int tx = static_cast<int>(uv.x * (texture.width - 1.0f) + 0.5f);
-    int ty = static_cast<int>(uv.y * (texture.height - 1.0f) + 0.5f);
-
-    // Clamp to inside of texture:
-    tx = std::max(tx, 0);
-    tx = std::min(tx, texture.width - 1);
-    ty = std::max(ty, 0);
-    ty = std::min(ty, texture.height - 1);
-
-    return texture.pixels[ty * texture.width + tx];
-  }
+  inline uint8_t sample_texture(const Texture &texture, int x, int y) { return texture.pixels[x + y * texture.width]; }
 
   void paint_uniform_rectangle(const PaintTarget &target,
     const ImVec2 &min_f,
@@ -202,11 +184,10 @@ namespace {
     max_x_i = std::min(max_x_i, target.width);
     max_y_i = std::min(max_y_i, target.height);
 
-    stats->uniform_rectangle_pixels += (max_x_i - min_x_i) * (max_y_i - min_y_i);
-
     // We often blend the same colors over and over again, so optimize for this (saves 25% total cpu):
     uint32_t last_target_pixel = target.pixels[min_y_i * target.width + min_x_i];
-    uint32_t last_output = blend(ColorInt(last_target_pixel), color).toUint32();
+    const auto *lastColorRef = reinterpret_cast<const ColorInt *>(&last_target_pixel);
+    uint32_t last_output = blend(*lastColorRef, color);
 
     for (int y = min_y_i; y < max_y_i; ++y) {
       for (int x = min_x_i; x < max_x_i; ++x) {
@@ -216,7 +197,8 @@ namespace {
           continue;
         }
         last_target_pixel = target_pixel;
-        target_pixel = blend(ColorInt(target_pixel), color).toUint32();
+        const auto *colorRef = reinterpret_cast<const ColorInt *>(&target_pixel);
+        target_pixel = blend(*colorRef, color);
         last_output = target_pixel;
       }
     }
@@ -260,10 +242,7 @@ namespace {
     max_x_i = std::min(max_x_i, target.width);
     max_y_i = std::min(max_y_i, target.height);
 
-    stats->font_pixels += (max_x_i - min_x_i) * (max_y_i - min_y_i);
-
     const auto topleft = ImVec2(min_x_i + 0.5f * target.scale.x, min_y_i + 0.5f * target.scale.y);
-
     const ImVec2 delta_uv_per_pixel = {
       (max_v.uv.x - min_v.uv.x) / distanceX,
       (max_v.uv.y - min_v.uv.y) / distanceY,
@@ -272,27 +251,38 @@ namespace {
       min_v.uv.x + (topleft.x - min_v.pos.x) * delta_uv_per_pixel.x,
       min_v.uv.y + (topleft.y - min_v.pos.y) * delta_uv_per_pixel.y,
     };
-    ImVec2 current_uv = uv_topleft;
 
-    for (int y = min_y_i; y < max_y_i; ++y, current_uv.y += delta_uv_per_pixel.y) {
-      current_uv.x = uv_topleft.x;
-      for (int x = min_x_i; x < max_x_i; ++x, current_uv.x += delta_uv_per_pixel.x) {
+    int startX = uv_topleft.x * (texture.width - 1.0f) + 0.5f;
+    int startY = uv_topleft.y * (texture.height - 1.0f) + 0.5f;
+
+    int currentX = startX;
+    int currentY = startY;
+
+    float deltaX = delta_uv_per_pixel.x * texture.width;
+    float deltaY = delta_uv_per_pixel.y * texture.height;
+
+    for (int y = min_y_i; y < max_y_i; ++y) {
+      currentX = startX;
+      for (int x = min_x_i; x < max_x_i; ++x) {
         uint32_t &target_pixel = target.pixels[y * target.width + x];
-        const uint8_t texel = sample_texture(texture, current_uv);
+        const auto *targetColorRef = reinterpret_cast<const ColorInt *>(&target_pixel);
+        const uint8_t texel = sample_texture(texture, currentX, currentY);
+        if (deltaX != 0) { currentX += 1; }
 
         // The font texture is all black or all white, so optimize for this:
         if (texel == 0) { continue; }
         if (texel == 255) {
-          ColorInt source_color = ColorInt(min_v.col);
-          target_pixel = blend(ColorInt(target_pixel), source_color).toUint32();
+          const auto *colorRef = reinterpret_cast<const ColorInt *>(&min_v.col);
+          target_pixel = blend(*targetColorRef, *colorRef);
           continue;
         }
 
         // Other textured rectangles
-        ColorInt source_color = ColorInt(min_v.col);
+        auto source_color = ColorInt(min_v.col);
         source_color.a = source_color.a * texel / 255;
-        target_pixel = blend(ColorInt(target_pixel), source_color).toUint32();
+        target_pixel = blend(*targetColorRef, source_color);
       }
+      if (deltaY != 0) { currentY += 1; }
     }
   }
 
@@ -400,7 +390,9 @@ namespace {
 
     // We often blend the same colors over and over again, so optimize for this (saves 10% total cpu):
     uint32_t last_target_pixel = 0;
-    uint32_t last_output = blend(ColorInt(last_target_pixel), ColorInt(v0.col)).toUint32();
+    const auto *lastColorRef = reinterpret_cast<const ColorInt *>(&last_target_pixel);
+    const auto *colorRef = reinterpret_cast<const ColorInt *>(&v0.col);
+    uint32_t last_output = blend(*lastColorRef, *colorRef);
 
     for (int y = min_y_i; y < max_y_i; ++y) {
       auto bary = bary_current_row;
@@ -432,13 +424,12 @@ namespace {
         uint32_t &target_pixel = target.pixels[y * target.width + x];
 
         if (has_uniform_color && !texture) {
-          stats->uniform_triangle_pixels += 1;
           if (target_pixel == last_target_pixel) {
             target_pixel = last_output;
             continue;
           }
           last_target_pixel = target_pixel;
-          target_pixel = blend(ColorInt(target_pixel), ColorInt(v0.col)).toUint32();
+          target_pixel = blend(*lastColorRef, *colorRef);
           last_output = target_pixel;
           continue;
         }
@@ -448,14 +439,14 @@ namespace {
         if (has_uniform_color) {
           src_color = c0;
         } else {
-          stats->gradient_triangle_pixels += 1;
           src_color = w0 * c0 + w1 * c1 + w2 * c2;
         }
 
         if (texture) {
-          stats->textured_triangle_pixels += 1;
           const ImVec2 uv = w0 * v0.uv + w1 * v1.uv + w2 * v2.uv;
-          src_color.w *= sample_texture(*texture, uv) / 255.0f;
+          int x = uv.x * (texture->width - 1.0f) + 0.5f;
+          int y = uv.y * (texture->height - 1.0f) + 0.5f;
+          src_color.w *= sample_texture(*texture, x, y) / 255.0f;
         }
 
         if (src_color.w <= 0.0f) { continue; }// Transparent.
@@ -567,21 +558,10 @@ namespace {
           const auto num_pixels = (max.x - min.x) * (max.y - min.y) * target.scale.x * target.scale.y;
 
           if (has_uniform_color) {
-            if (has_texture) {
-              stats->textured_rectangle_pixels += num_pixels;
-            } else {
-              paint_uniform_rectangle(target, min, max, ColorInt(v0.col), stats);
-              i += 6;
-              continue;
-            }
-          } else {
-            if (has_texture) {
-              // I have never encountered these.
-              stats->gradient_textured_rectangle_pixels += num_pixels;
-            } else {
-              // Color picker. TODO: Optimize
-              stats->gradient_rectangle_pixels += num_pixels;
-            }
+            const auto *colorRef = reinterpret_cast<const ColorInt *>(&v0.col);
+            paint_uniform_rectangle(target, min, max, *colorRef, stats);
+            i += 6;
+            continue;
           }
         }
       }
