@@ -267,7 +267,7 @@ namespace {
         uint32_t &target_pixel = target.pixels[y * target.width + x];
         const auto *targetColorRef = reinterpret_cast<const ColorInt *>(&target_pixel);
         const uint8_t texel = sample_texture(texture, currentX, currentY);
-        if (deltaX != 0) { currentX += 1; }
+        if (deltaX != 0 && currentX < texture.width - 1) { currentX += 1; }
 
         // The font texture is all black or all white, so optimize for this:
         if (texel == 0) { continue; }
@@ -282,7 +282,7 @@ namespace {
         source_color.a = source_color.a * texel / 255;
         target_pixel = blend(*targetColorRef, source_color);
       }
-      if (deltaY != 0) { currentY += 1; }
+      if (deltaY != 0 && currentY < texture.height - 1) { currentY += 1; }
     }
   }
 
