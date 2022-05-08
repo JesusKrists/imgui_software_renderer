@@ -17,6 +17,14 @@
 struct ImDrawData;
 namespace imgui_sw {
 
+struct Texture
+{
+  const uint32_t *pixels;
+  int width;
+  int height;
+};
+
+
 struct SwOptions
 {
   bool optimize_text = true;// No reason to turn this off.

@@ -9,11 +9,14 @@
 #include <cmath>
 #include <vector>
 #include <iostream>
+#include <csignal>
 
 #include <imgui.h>
 
 namespace imgui_sw {
 namespace {
+
+  const Texture *fontTexture = nullptr;
 
   struct Stats
   {
@@ -26,14 +29,6 @@ namespace {
     double gradient_rectangle_pixels = 0;
     double gradient_textured_rectangle_pixels = 0;
   };
-
-  struct Texture
-  {
-    const uint8_t *pixels;// 8-bit.
-    int width;
-    int height;
-  };
-
   struct PaintTarget
   {
     uint32_t *pixels;
@@ -54,13 +49,22 @@ namespace {
       : a((color & 0xFF000000) >> 24), b((color & 0x00FF0000) >> 16), g((color & 0x0000FF00) >> 8),
         r((color & 0x000000FF))
     {}
+
+    ColorInt &operator*=(const ColorInt &other)
+    {
+      r = r * other.r / 255;
+      g = g * other.g / 255;
+      b = b * other.b / 255;
+      a = a * other.a / 255;
+      return *this;
+    }
   };
 #pragma pack(pop)
 
   uint32_t blend(const ColorInt &target, const ColorInt &source)
   {
     if (source.a >= 255) return *reinterpret_cast<const uint32_t *>(&source);
-    return (0 << 24u) | (((source.b * source.a + target.b * (255 - source.a)) / 255) << 16u)
+    return (target.a << 24u) | (((source.b * source.a + target.b * (255 - source.a)) / 255) << 16u)
            | (((source.g * source.a + target.g * (255 - source.a)) / 255) << 8u)
            | ((source.r * source.a + target.r * (255 - source.a)) / 255);
   }
@@ -164,7 +168,12 @@ namespace {
     return (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
   }
 
-  inline uint8_t sample_texture(const Texture &texture, int x, int y) { return texture.pixels[x + y * texture.width]; }
+  inline uint8_t sample_font_texture(const Texture &texture, int x, int y)
+  {
+    return (texture.pixels[x + y * texture.width] & 0xFF000000) >> 24;
+  }
+
+  inline uint32_t sample_texture(const Texture &texture, int x, int y) { return texture.pixels[x + y * texture.width]; }
 
   void paint_uniform_rectangle(const PaintTarget &target,
     const ImVec2 &min_f,
@@ -266,21 +275,28 @@ namespace {
       for (int x = min_x_i; x < max_x_i; ++x) {
         uint32_t &target_pixel = target.pixels[y * target.width + x];
         const auto *targetColorRef = reinterpret_cast<const ColorInt *>(&target_pixel);
-        const uint8_t texel = sample_texture(texture, currentX, currentY);
-        if (deltaX != 0 && currentX < texture.width - 1) { currentX += 1; }
+        const auto *colorRef = reinterpret_cast<const ColorInt *>(&min_v.col);
+        uint8_t texel = 0;
+        if (&texture == fontTexture) {
+          texel = sample_font_texture(texture, currentX, currentY);
+          if (deltaX != 0 && currentX < texture.width - 1) { currentX += 1; }
 
-        // The font texture is all black or all white, so optimize for this:
-        if (texel == 0) { continue; }
-        if (texel == 255) {
-          const auto *colorRef = reinterpret_cast<const ColorInt *>(&min_v.col);
-          target_pixel = blend(*targetColorRef, *colorRef);
-          continue;
+          // The font texture is all black or all white, so optimize for this:
+          if (texel == 0) { continue; }
+          if (texel == 255) {
+            target_pixel = blend(*targetColorRef, *colorRef);
+            continue;
+          }
+
+        } else {
+
+          auto src_color = ColorInt(sample_texture(texture, currentX, currentY));
+          auto target_color = ColorInt(min_v.col);
+          if (deltaX != 0 && currentX < texture.width - 1) { currentX += 1; }
+
+          src_color *= target_color;
+          target_pixel = blend(*targetColorRef, src_color);
         }
-
-        // Other textured rectangles
-        auto source_color = ColorInt(min_v.col);
-        source_color.a = source_color.a * texel / 255;
-        target_pixel = blend(*targetColorRef, source_color);
       }
       if (deltaY != 0 && currentY < texture.height - 1) { currentY += 1; }
     }
@@ -443,10 +459,12 @@ namespace {
         }
 
         if (texture) {
+          if (texture != fontTexture) { raise(SIGTRAP); }
+
           const ImVec2 uv = w0 * v0.uv + w1 * v1.uv + w2 * v2.uv;
           int x = uv.x * (texture->width - 1.0f) + 0.5f;
           int y = uv.y * (texture->height - 1.0f) + 0.5f;
-          src_color.w *= sample_texture(*texture, x, y) / 255.0f;
+          src_color.w *= sample_font_texture(*texture, x, y) / 255.0f;
         }
 
         if (src_color.w <= 0.0f) { continue; }// Transparent.
@@ -615,9 +633,11 @@ void bind_imgui_painting()
   // Load default font (embedded in code):
   uint8_t *tex_data;
   int font_width, font_height;
-  io.Fonts->GetTexDataAsAlpha8(&tex_data, &font_width, &font_height);
-  const auto texture = new Texture{ tex_data, font_width, font_height };
+  io.Fonts->GetTexDataAsRGBA32(&tex_data, &font_width, &font_height);
+  const auto texture = new Texture{ reinterpret_cast<uint32_t *>(tex_data), font_width, font_height };
   io.Fonts->TexID = texture;
+
+  fontTexture = texture;
 }
 
 static Stats s_stats;// TODO: pass as an argument?
