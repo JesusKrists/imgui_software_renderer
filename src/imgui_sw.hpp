@@ -19,9 +19,9 @@ namespace imgui_sw {
 
 struct Texture
 {
-  const uint32_t *pixels;
-  int width;
-  int height;
+  const uint32_t *pixels = nullptr;
+  int width = 0;
+  int height = 0;
 };
 
 
