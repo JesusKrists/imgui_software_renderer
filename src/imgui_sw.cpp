@@ -44,11 +44,8 @@ namespace {
   struct ColorInt
   {
     uint8_t r, g, b, a = 0;
-    ColorInt() = default;
-    ColorInt(uint32_t color)
-      : a((color & 0xFF000000) >> 24), b((color & 0x00FF0000) >> 16), g((color & 0x0000FF00) >> 8),
-        r((color & 0x000000FF))
-    {}
+    ColorInt(const std::string &) {}
+
 
     ColorInt &operator*=(const ColorInt &other)
     {
@@ -170,7 +167,7 @@ namespace {
 
   inline uint8_t sample_font_texture(const Texture &texture, int x, int y)
   {
-    return (texture.pixels[x + y * texture.width] & 0xFF000000) >> 24;
+    return reinterpret_cast<const uint8_t *>(texture.pixels)[x + y * texture.width];
   }
 
   inline uint32_t sample_texture(const Texture &texture, int x, int y) { return texture.pixels[x + y * texture.width]; }
@@ -276,9 +273,9 @@ namespace {
         uint32_t &target_pixel = target.pixels[y * target.width + x];
         const auto *targetColorRef = reinterpret_cast<const ColorInt *>(&target_pixel);
         const auto *colorRef = reinterpret_cast<const ColorInt *>(&min_v.col);
-        uint8_t texel = 0;
+
         if (&texture == fontTexture) {
-          texel = sample_font_texture(texture, currentX, currentY);
+          uint8_t texel = sample_font_texture(texture, currentX, currentY);
           if (deltaX != 0 && currentX < texture.width - 1) { currentX += 1; }
 
           // The font texture is all black or all white, so optimize for this:
@@ -289,13 +286,13 @@ namespace {
           }
 
         } else {
+          auto texColor = sample_texture(texture, currentX, currentY);
+          auto src_color = reinterpret_cast<ColorInt *>(&texColor);
 
-          auto src_color = ColorInt(sample_texture(texture, currentX, currentY));
-          auto target_color = ColorInt(min_v.col);
           if (deltaX != 0 && currentX < texture.width - 1) { currentX += 1; }
 
-          src_color *= target_color;
-          target_pixel = blend(*targetColorRef, src_color);
+          *src_color *= *colorRef;
+          target_pixel = blend(*targetColorRef, *src_color);
         }
       }
       if (deltaY != 0 && currentY < texture.height - 1) { currentY += 1; }
@@ -633,7 +630,7 @@ void bind_imgui_painting()
   // Load default font (embedded in code):
   uint8_t *tex_data;
   int font_width, font_height;
-  io.Fonts->GetTexDataAsRGBA32(&tex_data, &font_width, &font_height);
+  io.Fonts->GetTexDataAsAlpha8(&tex_data, &font_width, &font_height);
   const auto texture = new Texture{ reinterpret_cast<uint32_t *>(tex_data), font_width, font_height };
   io.Fonts->TexID = texture;
 
